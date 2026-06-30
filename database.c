@@ -339,8 +339,12 @@ Database* load_database() {
         int name_len;
         if (fread(&name_len, sizeof(int), 1, file) != 1) break;
         
+        if (name_len < 0 || name_len >= MAX_TABLE_NAME) {
+            break; // corrupt or foreign file -- would overflow table_name below
+        }
+        
         char table_name[MAX_TABLE_NAME];
-        if (fread(table_name, sizeof(char), name_len, file) != name_len) break;
+        if (fread(table_name, sizeof(char), (size_t)name_len, file) != (size_t)name_len) break;
         table_name[name_len] = '\0';
         
         int column_count;
@@ -353,17 +357,31 @@ Database* load_database() {
         Table* table = create_table(table_name);
         if (!table) break;
         
-        table->column_count = column_count;
+        // NOTE: column_count is intentionally *not* pre-set here. add_column()
+        // below uses table->column_count as the next write index and then
+        // increments it itself (the same contract every other caller relies
+        // on, e.g. the "ADD COLUMN" command). Pre-setting it to the final
+        // count before the loop -- as this used to do -- made every reload
+        // double the column count: the first add_column() call wrote into
+        // slot [column_count] instead of slot [0], leaving slot 0 (and every
+        // slot up to the real data) as uninitialized heap garbage that then
+        // got treated as a real column for the rest of the program's life.
         table->next_id = next_id;
-        table->columns = (Column*)malloc(MAX_COLUMNS * sizeof(Column));
         
         // Read columns
         for (int c = 0; c < column_count; c++) {
             int col_name_len;
             if (fread(&col_name_len, sizeof(int), 1, file) != 1) break;
             
+            if (col_name_len < 0 || col_name_len >= MAX_COLUMN_NAME) {
+                // Corrupt or foreign file -- refuse to read past the
+                // stack buffer below rather than overflowing it with
+                // whatever length value was on disk.
+                break;
+            }
+            
             char col_name[MAX_COLUMN_NAME];
-            if (fread(col_name, sizeof(char), col_name_len, file) != col_name_len) break;
+            if (fread(col_name, sizeof(char), (size_t)col_name_len, file) != (size_t)col_name_len) break;
             col_name[col_name_len] = '\0';
             
             ColumnType type;
@@ -532,6 +550,16 @@ void process_command(Database* db, char* command) {
             if (table && add_table(db, table)) {
                 printf("Table '%s' created successfully.\n", table_name);
             } else {
+                // add_table() only takes ownership of `table` on success
+                // (it copies the struct into db->tables and frees just the
+                // temporary wrapper itself). On failure -- almost always
+                // because a table with this name already exists -- the
+                // wrapper *and* the 16KB index it calloc'd in
+                // create_table() were never freed by anyone. free_table()
+                // releases both.
+                if (table) {
+                    free_table(table);
+                }
                 printf("Error: Table already exists or creation failed.\n");
             }
         } else {
