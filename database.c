@@ -72,6 +72,18 @@ void trim_newline(char* str) {
     }
 }
 
+/* Bounded string copy that always null-terminates `dst` (a buffer of
+ * `dst_size` bytes), truncating `src` if it doesn't fit. Replaces the old
+ * "copy n-1 bytes, then manually set the last byte to NUL by hand" pattern
+ * that used to appear at every call site below -- functionally fine, but
+ * it's exactly the shape GCC's -Wstringop-truncation warns about, since
+ * the underlying copy not null-terminating its destination on its own is
+ * what that warning is watching for, regardless of the manual fixup
+ * after it. */
+static void safe_copy(char* dst, const char* src, size_t dst_size) {
+    snprintf(dst, dst_size, "%s", src);
+}
+
 // ============================================================================
 // ROW OPERATIONS
 // ============================================================================
@@ -151,8 +163,7 @@ Table* create_table(const char* name) {
     Table* table = (Table*)malloc(sizeof(Table));
     if (!table) return NULL;
     
-    strncpy(table->name, name, MAX_TABLE_NAME - 1);
-    table->name[MAX_TABLE_NAME - 1] = '\0';
+    safe_copy(table->name, name, MAX_TABLE_NAME);
     table->columns = NULL;
     table->column_count = 0;
     table->index = (HashBucket*)calloc(HASH_TABLE_SIZE, sizeof(HashBucket));
@@ -207,8 +218,7 @@ bool add_column(Table* table, const char* name, ColumnType type) {
     }
     
     Column* col = &table->columns[table->column_count];
-    strncpy(col->name, name, MAX_COLUMN_NAME - 1);
-    col->name[MAX_COLUMN_NAME - 1] = '\0';
+    safe_copy(col->name, name, MAX_COLUMN_NAME);
     col->type = type;
     table->column_count++;
     
@@ -403,7 +413,7 @@ Database* load_database() {
                 if (fread(&val_len, sizeof(int), 1, file) != 1) break;
                 
                 if (val_len > 0 && val_len < MAX_COLUMN_VALUE) {
-                    if (fread(row_node->row.values[v], sizeof(char), val_len, file) != val_len) break;
+                    if (fread(row_node->row.values[v], sizeof(char), (size_t)val_len, file) != (size_t)val_len) break;
                     row_node->row.values[v][val_len] = '\0';
                 }
             }
@@ -611,8 +621,7 @@ void process_command(Database* db, char* command) {
                         trim_newline(value);
                         RowNode* row_node = find_row(table, id);
                         if (row_node) {
-                            strncpy(row_node->row.values[i], value, MAX_COLUMN_VALUE - 1);
-                            row_node->row.values[i][MAX_COLUMN_VALUE - 1] = '\0';
+                            safe_copy(row_node->row.values[i], value, MAX_COLUMN_VALUE);
                         }
                     }
                 }
@@ -675,8 +684,7 @@ void process_command(Database* db, char* command) {
                 return;
             }
             
-            strncpy(row_node->row.values[col_idx], value, MAX_COLUMN_VALUE - 1);
-            row_node->row.values[col_idx][MAX_COLUMN_VALUE - 1] = '\0';
+            safe_copy(row_node->row.values[col_idx], value, MAX_COLUMN_VALUE);
             printf("Row updated successfully.\n");
         } else {
             printf("Syntax: UPDATE <table> SET <col>=<val> WHERE id=<id>\n");

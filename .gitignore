@@ -1,0 +1,5 @@
+bin/
+*.o
+*.exe
+database.dat
+database.idx
