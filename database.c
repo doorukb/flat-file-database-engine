@@ -72,6 +72,18 @@ void trim_newline(char* str) {
     }
 }
 
+/* Bounded string copy that always null-terminates `dst` (a buffer of
+ * `dst_size` bytes), truncating `src` if it doesn't fit. Replaces the old
+ * "copy n-1 bytes, then manually set the last byte to NUL by hand" pattern
+ * that used to appear at every call site below -- functionally fine, but
+ * it's exactly the shape GCC's -Wstringop-truncation warns about, since
+ * the underlying copy not null-terminating its destination on its own is
+ * what that warning is watching for, regardless of the manual fixup
+ * after it. */
+static void safe_copy(char* dst, const char* src, size_t dst_size) {
+    snprintf(dst, dst_size, "%s", src);
+}
+
 // ============================================================================
 // ROW OPERATIONS
 // ============================================================================
@@ -151,8 +163,7 @@ Table* create_table(const char* name) {
     Table* table = (Table*)malloc(sizeof(Table));
     if (!table) return NULL;
     
-    strncpy(table->name, name, MAX_TABLE_NAME - 1);
-    table->name[MAX_TABLE_NAME - 1] = '\0';
+    safe_copy(table->name, name, MAX_TABLE_NAME);
     table->columns = NULL;
     table->column_count = 0;
     table->index = (HashBucket*)calloc(HASH_TABLE_SIZE, sizeof(HashBucket));
@@ -207,8 +218,7 @@ bool add_column(Table* table, const char* name, ColumnType type) {
     }
     
     Column* col = &table->columns[table->column_count];
-    strncpy(col->name, name, MAX_COLUMN_NAME - 1);
-    col->name[MAX_COLUMN_NAME - 1] = '\0';
+    safe_copy(col->name, name, MAX_COLUMN_NAME);
     col->type = type;
     table->column_count++;
     
@@ -339,8 +349,12 @@ Database* load_database() {
         int name_len;
         if (fread(&name_len, sizeof(int), 1, file) != 1) break;
         
+        if (name_len < 0 || name_len >= MAX_TABLE_NAME) {
+            break; // corrupt or foreign file -- would overflow table_name below
+        }
+        
         char table_name[MAX_TABLE_NAME];
-        if (fread(table_name, sizeof(char), name_len, file) != name_len) break;
+        if (fread(table_name, sizeof(char), (size_t)name_len, file) != (size_t)name_len) break;
         table_name[name_len] = '\0';
         
         int column_count;
@@ -353,17 +367,31 @@ Database* load_database() {
         Table* table = create_table(table_name);
         if (!table) break;
         
-        table->column_count = column_count;
+        // NOTE: column_count is intentionally *not* pre-set here. add_column()
+        // below uses table->column_count as the next write index and then
+        // increments it itself (the same contract every other caller relies
+        // on, e.g. the "ADD COLUMN" command). Pre-setting it to the final
+        // count before the loop -- as this used to do -- made every reload
+        // double the column count: the first add_column() call wrote into
+        // slot [column_count] instead of slot [0], leaving slot 0 (and every
+        // slot up to the real data) as uninitialized heap garbage that then
+        // got treated as a real column for the rest of the program's life.
         table->next_id = next_id;
-        table->columns = (Column*)malloc(MAX_COLUMNS * sizeof(Column));
         
         // Read columns
         for (int c = 0; c < column_count; c++) {
             int col_name_len;
             if (fread(&col_name_len, sizeof(int), 1, file) != 1) break;
             
+            if (col_name_len < 0 || col_name_len >= MAX_COLUMN_NAME) {
+                // Corrupt or foreign file -- refuse to read past the
+                // stack buffer below rather than overflowing it with
+                // whatever length value was on disk.
+                break;
+            }
+            
             char col_name[MAX_COLUMN_NAME];
-            if (fread(col_name, sizeof(char), col_name_len, file) != col_name_len) break;
+            if (fread(col_name, sizeof(char), (size_t)col_name_len, file) != (size_t)col_name_len) break;
             col_name[col_name_len] = '\0';
             
             ColumnType type;
@@ -385,7 +413,7 @@ Database* load_database() {
                 if (fread(&val_len, sizeof(int), 1, file) != 1) break;
                 
                 if (val_len > 0 && val_len < MAX_COLUMN_VALUE) {
-                    if (fread(row_node->row.values[v], sizeof(char), val_len, file) != val_len) break;
+                    if (fread(row_node->row.values[v], sizeof(char), (size_t)val_len, file) != (size_t)val_len) break;
                     row_node->row.values[v][val_len] = '\0';
                 }
             }
@@ -532,6 +560,16 @@ void process_command(Database* db, char* command) {
             if (table && add_table(db, table)) {
                 printf("Table '%s' created successfully.\n", table_name);
             } else {
+                // add_table() only takes ownership of `table` on success
+                // (it copies the struct into db->tables and frees just the
+                // temporary wrapper itself). On failure -- almost always
+                // because a table with this name already exists -- the
+                // wrapper *and* the 16KB index it calloc'd in
+                // create_table() were never freed by anyone. free_table()
+                // releases both.
+                if (table) {
+                    free_table(table);
+                }
                 printf("Error: Table already exists or creation failed.\n");
             }
         } else {
@@ -583,8 +621,7 @@ void process_command(Database* db, char* command) {
                         trim_newline(value);
                         RowNode* row_node = find_row(table, id);
                         if (row_node) {
-                            strncpy(row_node->row.values[i], value, MAX_COLUMN_VALUE - 1);
-                            row_node->row.values[i][MAX_COLUMN_VALUE - 1] = '\0';
+                            safe_copy(row_node->row.values[i], value, MAX_COLUMN_VALUE);
                         }
                     }
                 }
@@ -647,8 +684,7 @@ void process_command(Database* db, char* command) {
                 return;
             }
             
-            strncpy(row_node->row.values[col_idx], value, MAX_COLUMN_VALUE - 1);
-            row_node->row.values[col_idx][MAX_COLUMN_VALUE - 1] = '\0';
+            safe_copy(row_node->row.values[col_idx], value, MAX_COLUMN_VALUE);
             printf("Row updated successfully.\n");
         } else {
             printf("Syntax: UPDATE <table> SET <col>=<val> WHERE id=<id>\n");
