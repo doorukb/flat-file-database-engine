@@ -292,7 +292,7 @@ static void process_command(Database* db, char* command) {
             strcmp(table_cmd, "TABLE") == 0) {
             for (int i = 0; i < db->table_count; i++) {
                 if (strcmp(db->tables[i].name, table_name) == 0) {
-                    free_table(&db->tables[i]);
+                    free_table_contents(&db->tables[i]);
                     for (int j = i; j < db->table_count - 1; j++) {
                         db->tables[j] = db->tables[j + 1];
                     }

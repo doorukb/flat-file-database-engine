@@ -60,6 +60,7 @@ bool delete_row(Table* table, uint32_t id);
 
 Table* create_table(const char* name);
 void free_table(Table* table);
+void free_table_contents(Table* table);
 Table* find_table(Database* db, const char* name);
 bool add_column(Table* table, const char* name, ColumnType type);
 
