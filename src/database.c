@@ -143,6 +143,14 @@ bool add_column(Table* table, const char* name, ColumnType type) {
         return false;
     }
 
+    /* Reject duplicate column names: UPDATE resolves columns by name, so a
+     * duplicate would make the second column unreachable. */
+    for (int i = 0; i < table->column_count; i++) {
+        if (strcmp(table->columns[i].name, name) == 0) {
+            return false;
+        }
+    }
+
     if (!table->columns) {
         table->columns = (Column*)malloc(MAX_COLUMNS * sizeof(Column));
         if (!table->columns) return false;

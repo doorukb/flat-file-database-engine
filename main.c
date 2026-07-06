@@ -127,10 +127,11 @@ static int find_column_index(Table* table, const char* col_name) {
     return -1;
 }
 
-static void process_command(Database* db, char* command) {
+/* Returns false when the user asked to quit */
+static bool process_command(Database* db, char* command) {
     trim_newline(command);
 
-    if (strlen(command) == 0) return;
+    if (strlen(command) == 0) return true;
 
     char cmd[256];
     sscanf(command, "%255s", cmd);
@@ -160,7 +161,7 @@ static void process_command(Database* db, char* command) {
             Table* table = find_table(db, table_name);
             if (!table) {
                 printf("Table '%s' not found.\n", table_name);
-                return;
+                return true;
             }
 
             ColumnType type = TYPE_STRING;
@@ -183,11 +184,12 @@ static void process_command(Database* db, char* command) {
             Table* table = find_table(db, table_name);
             if (!table) {
                 printf("Table '%s' not found.\n", table_name);
-                return;
+                return true;
             }
 
-            uint32_t id = table->next_id++;
+            uint32_t id = table->next_id;
             if (insert_row(table, id)) {
+                table->next_id++;
                 printf("Enter values for row %u:\n", id);
                 for (int i = 0; i < table->column_count; i++) {
                     printf("  %s: ", table->columns[i].name);
@@ -217,7 +219,7 @@ static void process_command(Database* db, char* command) {
             Table* table = find_table(db, table_name);
             if (!table) {
                 printf("Table '%s' not found.\n", table_name);
-                return;
+                return true;
             }
 
             char where[256];
@@ -243,19 +245,19 @@ static void process_command(Database* db, char* command) {
             Table* table = find_table(db, table_name);
             if (!table) {
                 printf("Table '%s' not found.\n", table_name);
-                return;
+                return true;
             }
 
             RowNode* row_node = find_row(table, id);
             if (!row_node) {
                 printf("Row with id=%u not found.\n", id);
-                return;
+                return true;
             }
 
             int col_idx = find_column_index(table, col_name);
             if (col_idx < 0) {
                 printf("Column '%s' not found.\n", col_name);
-                return;
+                return true;
             }
 
             safe_copy(row_node->row.values[col_idx], value, MAX_COLUMN_VALUE);
@@ -274,7 +276,7 @@ static void process_command(Database* db, char* command) {
             Table* table = find_table(db, table_name);
             if (!table) {
                 printf("Table '%s' not found.\n", table_name);
-                return;
+                return true;
             }
 
             if (delete_row(table, id)) {
@@ -298,7 +300,7 @@ static void process_command(Database* db, char* command) {
                     }
                     db->table_count--;
                     printf("Table '%s' dropped successfully.\n", table_name);
-                    return;
+                    return true;
                 }
             }
             printf("Table '%s' not found.\n", table_name);
@@ -330,12 +332,13 @@ static void process_command(Database* db, char* command) {
     }
     else if (strcmp(cmd, "QUIT") == 0 || strcmp(cmd, "EXIT") == 0) {
         printf("Goodbye!\n");
-        exit(0);
+        return false;
     }
     else {
         printf("Unknown command: %s\n", cmd);
         printf("Type HELP for available commands.\n");
     }
+    return true;
 }
 
 int main(void) {
@@ -359,7 +362,9 @@ int main(void) {
             break;
         }
 
-        process_command(db, command);
+        if (!process_command(db, command)) {
+            break;
+        }
     }
 
     save_database(db);
