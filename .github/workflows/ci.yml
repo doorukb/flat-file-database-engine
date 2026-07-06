@@ -1,0 +1,20 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: make
+      - name: Integration tests
+        run: make test
+      - name: Rebuild with sanitizers and re-run
+        run: |
+          make clean
+          make CFLAGS="-Wall -Wextra -Wpedantic -std=c11 -g -fsanitize=address,undefined -Iinclude"
+          make test
