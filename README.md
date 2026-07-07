@@ -1,5 +1,7 @@
 # Flat File Database Engine
 
+[![CI](https://github.com/doorukb/database/actions/workflows/ci.yml/badge.svg)](https://github.com/doorukb/database/actions/workflows/ci.yml)
+
 A small in-memory, file-persisted database engine with an interactive
 command shell : tables with typed columns, hash-indexed rows, and a SQL-ish
 command language (`CREATE TABLE`, `INSERT`, `SELECT ... WHERE`, `UPDATE`,

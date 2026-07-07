@@ -98,7 +98,11 @@ Table* create_table(const char* name) {
     return table;
 }
 
-void free_table(Table* table) {
+/* Free everything a table owns (rows, index, columns) but not the Table
+ * struct itself. Needed because tables live in two kinds of storage: as
+ * heap-allocated shells fresh out of create_table(), and as elements copied
+ * into the database's tables array by add_table(). */
+void free_table_contents(Table* table) {
     if (!table) return;
 
     for (int i = 0; i < HASH_TABLE_SIZE; i++) {
@@ -111,9 +115,17 @@ void free_table(Table* table) {
     }
 
     free(table->index);
+    table->index = NULL;
     if (table->columns) {
         free(table->columns);
+        table->columns = NULL;
     }
+}
+
+/* Free a heap-allocated table (from create_table) including the struct */
+void free_table(Table* table) {
+    if (!table) return;
+    free_table_contents(table);
     free(table);
 }
 
@@ -129,6 +141,14 @@ Table* find_table(Database* db, const char* name) {
 bool add_column(Table* table, const char* name, ColumnType type) {
     if (table->column_count >= MAX_COLUMNS) {
         return false;
+    }
+
+    /* Reject duplicate column names: UPDATE resolves columns by name, so a
+     * duplicate would make the second column unreachable. */
+    for (int i = 0; i < table->column_count; i++) {
+        if (strcmp(table->columns[i].name, name) == 0) {
+            return false;
+        }
     }
 
     if (!table->columns) {
@@ -164,7 +184,7 @@ void free_database(Database* db) {
     if (!db) return;
 
     for (int i = 0; i < db->table_count; i++) {
-        free_table(&db->tables[i]);
+        free_table_contents(&db->tables[i]);
     }
 
     free(db->tables);
@@ -177,9 +197,11 @@ bool add_table(Database* db, Table* table) {
     }
 
     if (db->table_count >= db->capacity) {
-        db->capacity *= 2;
-        db->tables = (Table*)realloc(db->tables, db->capacity * sizeof(Table));
-        if (!db->tables) return false;
+        int new_capacity = db->capacity * 2;
+        Table* grown = (Table*)realloc(db->tables, new_capacity * sizeof(Table));
+        if (!grown) return false;  /* keep the old array usable on failure */
+        db->tables = grown;
+        db->capacity = new_capacity;
     }
 
     db->tables[db->table_count] = *table;
